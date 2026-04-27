@@ -25,6 +25,33 @@ import 'package:budget/widgets/tableEntry.dart';
 import 'package:provider/provider.dart';
 
 Throttler appLinksThrottler = Throttler(duration: Duration(milliseconds: 350));
+Set<String> processedLaunchIds = {};
+String? lastProcessedUrl;
+
+void updateProcessedLaunchIds(String launchId) {
+  processedLaunchIds.add(launchId);
+  List<String> launchIds =
+      sharedPreferences.getStringList("processedLaunchIds") ?? [];
+  if (!launchIds.contains(launchId)) {
+    launchIds.add(launchId);
+    // Keep only last 100 to avoid bloat
+    if (launchIds.length > 100) {
+      launchIds.removeAt(0);
+    }
+    sharedPreferences.setStringList("processedLaunchIds", launchIds);
+  }
+}
+
+bool isLaunchIdProcessed(String launchId) {
+  if (processedLaunchIds.contains(launchId)) return true;
+  List<String> launchIds =
+      sharedPreferences.getStringList("processedLaunchIds") ?? [];
+  if (launchIds.contains(launchId)) {
+    processedLaunchIds.add(launchId);
+    return true;
+  }
+  return false;
+}
 
 class InitializeAppLinks extends StatelessWidget {
   const InitializeAppLinks({required this.child, super.key});
@@ -54,7 +81,7 @@ class _AppLinksWebState extends State<AppLinksWeb> {
     super.initState();
     // This delay is required by the web app
     Future.delayed(Duration(milliseconds: 0), () {
-      executeAppLink(navigatorKey.currentContext, Uri.base);
+      executeAppLink(navigatorKey.currentContext, Uri.base, isInitial: true);
     });
   }
 
@@ -94,7 +121,7 @@ class _AppLinksNativeState extends State<AppLinksNative> {
       // This delay may or may not be needed...
       // we need to make sure Material navigator is accessible by the context though!
       Future.delayed(Duration(milliseconds: 0), () {
-        executeAppLink(navigatorKey.currentContext, appLink);
+        executeAppLink(navigatorKey.currentContext, appLink, isInitial: true);
       });
     }
 
@@ -216,6 +243,7 @@ Future<Transaction?> processAddTransactionFromParams(
   if (rowId != null) {
     final Transaction transactionJustAdded =
         await database.getTransactionFromRowId(rowId);
+    print("Transaction added from params: ${transactionJustAdded.transactionPk}, Title: ${transactionJustAdded.name}, Amount: ${transactionJustAdded.amount}");
     flashTransaction(transactionJustAdded.transactionPk);
     openSnackbar(SnackbarMessage(
       title: "added-transaction".tr(),
@@ -275,12 +303,38 @@ Future processMessageToParse(
 }
 
 Future executeAppLink(BuildContext? context, Uri uri,
-    {Function(dynamic)? onDebug}) async {
+    {Function(dynamic)? onDebug, bool isInitial = false}) async {
   if (appStateSettings["hasOnboarded"] != true) return;
-  if (!appLinksThrottler.canProceed()) return;
+
+  // On Web, Uri.base is always available and processed in initState.
+  // We must ensure we only process it IF it's actually a deep link and hasn't been processed.
+  if (isInitial && kIsWeb) {
+    if (uri.path == "/" || uri.path == "" || !uri.path.contains("addTransaction")) {
+      return;
+    }
+    if (lastProcessedUrl == uri.toString()) {
+      print("Skipping initial Uri.base as it was already processed: $uri");
+      return;
+    }
+  }
+
+  bool canProceed = appLinksThrottler.canProceed();
+  print("Incoming app link: $uri, canProceed: $canProceed");
+  if (!canProceed) return;
 
   String endPoint = getApiEndpoint(uri);
   Map<String, String> params = parseAppLink(uri);
+  print("Parsed app link params: $params");
+
+  String? launchId = params["w2c_launch_id"];
+  if (launchId != null) {
+    if (isLaunchIdProcessed(launchId)) {
+      print("Skipping already processed launch_id: $launchId");
+      return;
+    }
+    updateProcessedLaunchIds(launchId);
+  }
+  lastProcessedUrl = uri.toString();
 
   // Note these URIs must be unique from the launch from widget URIs!
   switch (endPoint) {
