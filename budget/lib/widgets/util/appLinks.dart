@@ -318,10 +318,6 @@ Future executeAppLink(BuildContext? context, Uri uri,
     }
   }
 
-  bool canProceed = appLinksThrottler.canProceed();
-  print("Incoming app link: $uri, canProceed: $canProceed");
-  if (!canProceed) return;
-
   String endPoint = getApiEndpoint(uri);
   Map<String, String> params = parseAppLink(uri);
   print("Parsed app link params: $params");
@@ -332,6 +328,18 @@ Future executeAppLink(BuildContext? context, Uri uri,
       print("Skipping already processed launch_id: $launchId");
       return;
     }
+  }
+
+  if (lastProcessedUrl == uri.toString() && launchId == null) {
+    print("Skipping duplicate app link URL: $uri");
+    return;
+  }
+
+  bool canProceed = appLinksThrottler.canProceed();
+  print("Incoming app link: $uri, canProceed: $canProceed");
+  if (!canProceed) return;
+
+  if (launchId != null) {
     updateProcessedLaunchIds(launchId);
   }
   lastProcessedUrl = uri.toString();
